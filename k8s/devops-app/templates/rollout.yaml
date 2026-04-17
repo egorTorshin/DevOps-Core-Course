@@ -1,0 +1,104 @@
+{{- if .Values.rollouts.enabled }}
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: {{ include "devops-app.fullname" . }}
+  labels:
+    {{- include "devops-app.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  revisionHistoryLimit: {{ .Values.rollouts.revisionHistoryLimit | default 5 }}
+  selector:
+    matchLabels:
+      {{- include "devops-app.selectorLabels" . | nindent 6 }}
+  strategy:
+    {{- if eq .Values.rollouts.strategy "canary" }}
+    canary:
+      {{- with .Values.rollouts.canary.stableService }}
+      stableService: {{ . }}
+      {{- end }}
+      {{- with .Values.rollouts.canary.canaryService }}
+      canaryService: {{ . }}
+      {{- end }}
+      maxSurge: {{ .Values.rollouts.canary.maxSurge | default "25%" | quote }}
+      maxUnavailable: {{ .Values.rollouts.canary.maxUnavailable | default 0 }}
+      steps:
+        {{- toYaml .Values.rollouts.canary.steps | nindent 8 }}
+    {{- else if eq .Values.rollouts.strategy "blueGreen" }}
+    blueGreen:
+      activeService: {{ .Values.rollouts.blueGreen.activeService | default (printf "%s-service" (include "devops-app.fullname" .)) }}
+      previewService: {{ .Values.rollouts.blueGreen.previewService | default (printf "%s-preview" (include "devops-app.fullname" .)) }}
+      autoPromotionEnabled: {{ .Values.rollouts.blueGreen.autoPromotionEnabled | default false }}
+      {{- with .Values.rollouts.blueGreen.autoPromotionSeconds }}
+      autoPromotionSeconds: {{ . }}
+      {{- end }}
+      scaleDownDelaySeconds: {{ .Values.rollouts.blueGreen.scaleDownDelaySeconds | default 30 }}
+      {{- with .Values.rollouts.blueGreen.prePromotionAnalysis }}
+      prePromotionAnalysis:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.rollouts.blueGreen.postPromotionAnalysis }}
+      postPromotionAnalysis:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    {{- end }}
+  template:
+    metadata:
+      labels:
+        {{- include "devops-app.selectorLabels" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if .Values.vault.enabled }}
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: {{ .Values.vault.role | quote }}
+        vault.hashicorp.com/agent-inject-secret-config: {{ .Values.vault.secretPath | quote }}
+        vault.hashicorp.com/agent-inject-template-config: |
+          {{ .Values.vault.agentInjectTemplate | nindent 10 }}
+        {{- end }}
+    spec:
+      {{- if .Values.serviceAccount.create }}
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.securityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.containerPort }}
+              protocol: TCP
+          {{- if .Values.env }}
+          env:
+            {{- include "devops-app.envVars" . | nindent 12 }}
+            {{- toYaml .Values.env | nindent 12 }}
+          {{- end }}
+          envFrom:
+            - secretRef:
+                name: {{ include "devops-app.fullname" . }}-secret
+            - configMapRef:
+                name: {{ include "devops-app.fullname" . }}-env
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: config-volume
+              mountPath: /config
+              readOnly: true
+            {{- if .Values.persistence.enabled }}
+            - name: data-volume
+              mountPath: {{ .Values.persistence.mountPath | default "/data" }}
+            {{- end }}
+          livenessProbe:
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+      volumes:
+        - name: config-volume
+          configMap:
+            name: {{ include "devops-app.fullname" . }}-config
+        {{- if .Values.persistence.enabled }}
+        - name: data-volume
+          persistentVolumeClaim:
+            claimName: {{ include "devops-app.fullname" . }}-data
+        {{- end }}
+{{- end }}

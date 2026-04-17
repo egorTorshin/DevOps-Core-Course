@@ -1,0 +1,133 @@
+replicaCount: 3
+
+image:
+  repository: egortorshin/devops-info-service
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+nameOverride: ""
+fullnameOverride: ""
+
+env:
+  - name: APP_NAME
+    value: "devops-app"
+  - name: APP_PORT
+    value: "8000"
+
+service:
+  type: NodePort
+  port: 80
+  targetPort: 8000
+  nodePort: 30080
+
+resources:
+  requests:
+    memory: "128Mi"
+    cpu: "100m"
+  limits:
+    memory: "256Mi"
+    cpu: "200m"
+
+containerPort: 8000
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 8000
+  initialDelaySeconds: 10
+  periodSeconds: 5
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: 8000
+  initialDelaySeconds: 5
+  periodSeconds: 3
+  timeoutSeconds: 2
+  failureThreshold: 3
+
+configMap:
+  APP_ENV: "default"
+  LOG_LEVEL: "info"
+  FEATURES_VISITS: "true"
+
+persistence:
+  enabled: true
+  size: 100Mi
+  accessMode: ReadWriteOnce
+  storageClass: ""
+  mountPath: /data
+
+secrets:
+  USERNAME: "placeholder-user"
+  PASSWORD: "placeholder-pass"
+  DATABASE_URL: "postgresql://user:pass@localhost:5432/app"
+
+vault:
+  enabled: true
+  role: "devops-app"
+  secretPath: "secret/data/devops-app/config"
+  agentInjectTemplate: |
+    {{- with secret "secret/data/devops-app/config" -}}
+    DATABASE_URL={{ .Data.data.database_url }}
+    API_KEY={{ .Data.data.api_key }}
+    {{- end -}}
+
+serviceAccount:
+  create: true
+  name: "devops-app"
+
+rollouts:
+  enabled: false
+  strategy: canary
+  revisionHistoryLimit: 5
+
+  canary:
+    maxSurge: "25%"
+    maxUnavailable: 0
+    stableService: ""
+    canaryService: ""
+    steps:
+      - setWeight: 20
+      - pause: {}
+      - setWeight: 40
+      - pause:
+          duration: 30s
+      - setWeight: 60
+      - pause:
+          duration: 30s
+      - setWeight: 80
+      - pause:
+          duration: 30s
+      - setWeight: 100
+
+  blueGreen:
+    activeService: ""
+    previewService: ""
+    autoPromotionEnabled: false
+    scaleDownDelaySeconds: 30
+
+  analysis:
+    enabled: false
+    web:
+      path: /health
+      successCondition: ""
+      jsonPath: ""
+      interval: 10s
+      count: 3
+      failureLimit: 1
+      timeoutSeconds: 5
